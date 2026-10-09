@@ -4,7 +4,7 @@
   import FileList from './components/FileList.svelte';
   import { currentArchivePath, currentArchiveFiles, selectedFiles, isProcessing, progressPercent, currentProgressFile, progressStatus, isReadOnly } from './stores/archiveStore';
   import { AddFiles, SelectSaveFile, CreateNewArchive, OpenArchive } from '../wailsjs/go/services/ArchiveService.js';
-  import { EventsOn } from '../wailsjs/runtime/runtime.js';
+  import { EventsOn, OnFileDrop } from '../wailsjs/runtime/runtime.js';
 
   EventsOn("progress", (data: any) => {
     if (typeof data === "number") {
@@ -44,6 +44,11 @@
       return;
     }
 
+    if (paths.length > 5000) {
+      alert(`Você está tentando adicionar ${paths.length} arquivos de uma vez. O limite por operação é 5000 para evitar travamentos.`);
+      return;
+    }
+
     setTimeout(async () => {
       if ($currentArchivePath) {
         $isProcessing = true;
@@ -77,6 +82,17 @@
   }
 
   onMount(() => {
+    // 1. Tratamento Global de Erros Inesperados no Frontend (Evita tela branca)
+    window.addEventListener('error', (e) => {
+      console.error("Erro Global JS:", e);
+      alert("Ocorreu um erro inesperado na interface: " + e.message);
+    });
+
+    window.addEventListener('unhandledrejection', (e) => {
+      console.error("Promessa rejeitada não tratada:", e.reason);
+      alert("Falha de comunicação com o sistema ou erro não tratado: " + (e.reason?.message || e.reason));
+    });
+
     window.addEventListener('dragover', (e) => {
       e.preventDefault();
       dragHover = true;
@@ -90,9 +106,9 @@
     });
 
 
-    EventsOn("wails:file-drop", (x: number, y: number, paths: string[]) => {
+    OnFileDrop((x: number, y: number, paths: string[]) => {
       handlePaths(paths);
-    });
+    }, false);
 
     window.addEventListener('drop', (e) => {
       e.preventDefault();

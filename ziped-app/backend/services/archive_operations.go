@@ -4,10 +4,38 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"ziped-app/backend/models"
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
+
+func validateSafePath(destDir, extractPath string) (string, error) {
+	fullDestPath := filepath.Join(destDir, extractPath)
+	if !strings.HasPrefix(filepath.Clean(fullDestPath), filepath.Clean(destDir)+string(os.PathSeparator)) {
+		return "", fmt.Errorf("caminho inválido detectado (possível Zip Slip): %s", extractPath)
+	}
+	return fullDestPath, nil
+}
+
+func safeReplaceArchive(originalPath, tempPath string) error {
+	backupPath := originalPath + ".bak"
+	_ = os.Remove(backupPath)
+	
+	if err := os.Rename(originalPath, backupPath); err != nil {
+		os.Remove(tempPath)
+		return fmt.Errorf("falha ao criar backup do arquivo original: %w", err)
+	}
+
+	if err := os.Rename(tempPath, originalPath); err != nil {
+		os.Rename(backupPath, originalPath)
+		os.Remove(tempPath)
+		return fmt.Errorf("falha ao substituir arquivo, original restaurado: %w", err)
+	}
+
+	os.Remove(backupPath)
+	return nil
+}
 
 func (s *ArchiveService) OpenArchive(path string) ([]models.FileInfo, error) {
 	reader, err := getReader(path)
@@ -80,7 +108,12 @@ func (s *ArchiveService) AddFiles(archivePath string, files []string) (models.Ar
 		defer os.RemoveAll(tempDir)
 
 		for _, entry := range reader.GetFiles() {
-			fullDestPath := filepath.Join(tempDir, entry.Path)
+			fullDestPath, err := validateSafePath(tempDir, entry.Path)
+			if err != nil {
+				writer.Close()
+				reader.Close()
+				return models.ArchiveResult{Success: false, Error: err.Error()}, err
+			}
 			os.MkdirAll(filepath.Dir(fullDestPath), 0755)
 			if err := reader.ExtractFile(entry.Path, fullDestPath, nil); err != nil {
 				writer.Close()
@@ -107,9 +140,8 @@ func (s *ArchiveService) AddFiles(archivePath string, files []string) (models.Ar
 	if err := writer.Close(); err != nil {
 		return models.ArchiveResult{Success: false, Error: "Erro ao finalizar novo pacote: " + formatErrorMsg(err)}, err
 	}
-	os.Remove(archivePath)
-	if err := os.Rename(tempPath, archivePath); err != nil {
-		return models.ArchiveResult{Success: false, Error: "Erro ao salvar pacote atualizado"}, err
+	if err := safeReplaceArchive(archivePath, tempPath); err != nil {
+		return models.ArchiveResult{Success: false, Error: "Erro ao salvar pacote atualizado: " + err.Error()}, err
 	}
 
 	return models.ArchiveResult{Success: true, Message: "Arquivos adicionados com sucesso!"}, nil
@@ -137,7 +169,12 @@ func (s *ArchiveService) AddFolder(archivePath string, folder string) (models.Ar
 		defer os.RemoveAll(tempDir)
 
 		for _, entry := range reader.GetFiles() {
-			fullDestPath := filepath.Join(tempDir, entry.Path)
+			fullDestPath, err := validateSafePath(tempDir, entry.Path)
+			if err != nil {
+				writer.Close()
+				reader.Close()
+				return models.ArchiveResult{Success: false, Error: err.Error()}, err
+			}
 			os.MkdirAll(filepath.Dir(fullDestPath), 0755)
 			if err := reader.ExtractFile(entry.Path, fullDestPath, nil); err != nil {
 				writer.Close()
@@ -177,9 +214,8 @@ func (s *ArchiveService) AddFolder(archivePath string, folder string) (models.Ar
 	if err := writer.Close(); err != nil {
 		return models.ArchiveResult{Success: false, Error: "Erro ao finalizar novo pacote: " + formatErrorMsg(err)}, err
 	}
-	os.Remove(archivePath)
-	if err := os.Rename(tempPath, archivePath); err != nil {
-		return models.ArchiveResult{Success: false, Error: "Erro ao salvar pacote atualizado"}, err
+	if err := safeReplaceArchive(archivePath, tempPath); err != nil {
+		return models.ArchiveResult{Success: false, Error: "Erro ao salvar pacote atualizado: " + err.Error()}, err
 	}
 
 	return models.ArchiveResult{Success: true, Message: "Pasta adicionada com sucesso!"}, nil
@@ -209,10 +245,13 @@ func (s *ArchiveService) ExtractFiles(archivePath string, destPath string, files
 	var processedSize uint64
 	for _, entry := range archiveFiles {
 		if extractAll || filesMap[entry.Path] {
-			fullDestPath := filepath.Join(destPath, entry.Path)
+			fullDestPath, err := validateSafePath(destPath, entry.Path)
+			if err != nil {
+				return models.ArchiveResult{Success: false, Error: err.Error()}, err
+			}
 			os.MkdirAll(filepath.Dir(fullDestPath), 0755)
 
-			err := reader.ExtractFile(entry.Path, fullDestPath, func(n int) {
+			err = reader.ExtractFile(entry.Path, fullDestPath, func(n int) {
 				processedSize += uint64(n)
 				if totalSize > 0 {
 					percent := int(float64(processedSize) / float64(totalSize) * 100)
@@ -264,7 +303,12 @@ func (s *ArchiveService) DeleteEntries(archivePath string, entryNames []string) 
 
 	for _, entry := range reader.GetFiles() {
 		if !deleteMap[entry.Path] {
-			fullDestPath := filepath.Join(tempDir, entry.Path)
+			fullDestPath, err := validateSafePath(tempDir, entry.Path)
+			if err != nil {
+				writer.Close()
+				reader.Close()
+				return models.ArchiveResult{Success: false, Error: err.Error()}, err
+			}
 			os.MkdirAll(filepath.Dir(fullDestPath), 0755)
 			if err := reader.ExtractFile(entry.Path, fullDestPath, nil); err != nil {
 				writer.Close()
@@ -285,11 +329,8 @@ func (s *ArchiveService) DeleteEntries(archivePath string, entryNames []string) 
 	}
 	reader.Close()
 
-	if err := os.Remove(archivePath); err != nil {
-		return models.ArchiveResult{Success: false, Error: "Erro ao deletar original"}, err
-	}
-	if err := os.Rename(tempPath, archivePath); err != nil {
-		return models.ArchiveResult{Success: false, Error: "Erro ao renomear novo arquivo"}, err
+	if err := safeReplaceArchive(archivePath, tempPath); err != nil {
+		return models.ArchiveResult{Success: false, Error: "Erro ao atualizar pacote: " + err.Error()}, err
 	}
 
 	return models.ArchiveResult{Success: true, Message: "Itens excluídos com sucesso!"}, nil

@@ -23,6 +23,7 @@ body {
   height: 100vh;
   overflow: hidden;
   user-select: none; /* Previne seleção de texto acidental parecendo um app nativo */
+  --wails-drop-target: drop;
 }
 
 button {
