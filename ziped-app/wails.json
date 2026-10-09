@@ -9,5 +9,9 @@
   "author": {
     "name": "EdsoonJr",
     "email": "edsonjn2013@gmail.com"
+  },
+  "info": {
+    "productVersion": "1.0.2",
+    "fileVersion": "1.0.2"
   }
 }
